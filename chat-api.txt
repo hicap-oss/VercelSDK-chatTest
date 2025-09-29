@@ -1,0 +1,513 @@
+
+import { MODELS, MODELS_PRICING } from '@/lib/models';
+import { getSystemPromptES } from '@/lib/prompt/get_system_prompt_es';
+import { getSystemPromptEN } from '@/lib/prompt/get_system_prompt_en';
+import { getSystemPromptFR } from '@/lib/prompt/get_system_prompt_fr';
+import { getSystemPromptIT } from '@/lib/prompt/get_system_prompt_it';
+import { getSystemPromptPT } from '@/lib/prompt/get_system_prompt_pt';
+import { getSystemPromptDE } from '@/lib/prompt/get_system_prompt_de';
+import { createOpenRouter } from '@openrouter/ai-sdk-provider';
+import { streamText } from 'ai';
+import { routing } from '@/i18n/routing';
+import { google } from '@ai-sdk/google';
+import { anthropic } from '@ai-sdk/anthropic';
+import { ConvexHttpClient } from 'convex/browser';
+import { api } from '@/convex/_generated/api';
+import { chatModePromptES } from '@/lib/chat-mode/chat_mode_prompt_es';
+import { chatModePromptEN } from '@/lib/chat-mode/chat_mode_prompt_en';
+import { chatModePromptFR } from '@/lib/chat-mode/chat_mode_prompt_fr';
+import { chatModePromptIT } from '@/lib/chat-mode/chat_mode_prompt_it';
+import { chatModePromptPT } from '@/lib/chat-mode/chat_mode_prompt_pt';
+import { chatModePromptDE } from '@/lib/chat-mode/chat_mode_prompt_de';
+
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+
+
+const provider = createOpenAICompatible({
+    headers: { "api-key": process.env.PROVIDER_API_KEY },
+    baseURL: "https://api.hicap.ai/v2/openai",
+    includeUsage: true,
+});
+
+const openrouter = createOpenRouter({
+    apiKey: process.env.OPENROUTER_API_KEY,
+});
+
+const webSearchTool = anthropic.tools.webSearch_20250305({
+    maxUses: 5,
+});
+
+// Initialize Convex client
+const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL);
+
+export const runtime = 'edge';
+export const maxDuration = 800;
+
+// Helper to limit message history
+const trimMessages = (msgs, limit = 60) => msgs.slice(-limit);
+
+// Helper to validate message format
+const isValidMessage = (msg) =>
+    typeof msg === 'object' &&
+    ['user', 'assistant', 'system'].includes(msg.role) &&
+    (typeof msg.content === 'string' || Array.isArray(msg.content) || Array.isArray(msg.parts));
+
+// Function to get locale from request
+function getLocaleFromRequest(req) {
+    // Try to get locale from cookie first
+    const cookieLocale = req.cookies?.get('preferred-locale')?.value;
+    if (cookieLocale && routing.locales.includes(cookieLocale)) {
+        return cookieLocale;
+    }
+
+    // Try to get locale from Accept-Language header
+    const acceptLanguage = req.headers?.get('accept-language');
+    if (acceptLanguage) {
+        const preferredLocale = acceptLanguage.split(',')[0].split('-')[0];
+        if (routing.locales.includes(preferredLocale)) {
+            return preferredLocale;
+        }
+    }
+
+    // Fallback to default locale
+    return routing.defaultLocale;
+}
+
+// Function to normalize usage data from AI SDK
+const normalizeUsage = (usage) => {
+    if (!usage || typeof usage !== 'object') return {};
+    const promptTokens = Number(usage.promptTokens ?? usage.inputTokens ?? usage.prompt ?? 0) || 0;
+    const completionTokens = Number(usage.completionTokens ?? usage.outputTokens ?? usage.completion ?? 0) || 0;
+    if (promptTokens || completionTokens) return { promptTokens, completionTokens };
+    const totalTokens = Number(usage.totalTokens ?? 0) || 0;
+    return { promptTokens: totalTokens, completionTokens: 0 };
+};
+
+// Function to calculate total tokens
+const calculateTotalTokens = (usage, model) => {
+    const pricing = MODELS_PRICING[model];
+    const normalizedUsage = normalizeUsage(usage);
+    const inputTokens = normalizedUsage.promptTokens || 0;
+    const outputTokens = normalizedUsage.completionTokens || 0;
+    return inputTokens + (outputTokens * pricing["O/I Ratio"]);
+};
+
+// Function to calculate normalized tokens
+const calculateTotalTokensNormalized = (usage, model) => {
+    const pricing = MODELS_PRICING[model];
+    const totalTokens = calculateTotalTokens(usage, model);
+    return totalTokens * pricing["Normalizer"];
+};
+
+// Function to calculate cost
+const calculateCost = (usage, model) => {
+    const pricing = MODELS_PRICING[model];
+    const normalizedUsage = normalizeUsage(usage);
+    const inputTokens = normalizedUsage.promptTokens || 0;
+    const outputTokens = normalizedUsage.completionTokens || 0;
+    const inputCost = inputTokens * pricing['Input'];
+    const outputCost = outputTokens * pricing['Output'];
+    return inputCost + outputCost;
+};
+
+export async function POST(req) {
+    const {
+        messages = [],
+        model = MODELS[0],
+        isContinuation = false,
+        continuationPrompt = '',
+        initialGeneration = false,
+        initialMessage = '',
+        isError = '',
+        supabaseUrl = '',
+        supabaseAnonKey = '',
+        supabaseProjectId = '',
+        supabaseProjectName = '',
+        urls = [],
+        dbWorkspace = {},
+        workspaceId = null,
+        userId = null,
+        userEmail = '',
+        userName = '',
+        userPicture = '',
+        isChatMode = false,
+    } = await req.json();
+
+    // Get locale from request
+    const locale = getLocaleFromRequest(req);
+
+    console.log('LOCALE', locale);
+
+    // Select appropriate system prompt based on locale
+    const promptSystemParams = { supabaseUrl, supabaseAnonKey, supabaseProjectId, supabaseProjectName, dbWorkspace };
+    const systemPrompts = {
+        'en': isChatMode ? chatModePromptEN() : getSystemPromptEN(promptSystemParams),
+        'es': isChatMode ? chatModePromptES() : getSystemPromptES(promptSystemParams),
+        'fr': isChatMode ? chatModePromptFR() : getSystemPromptFR(promptSystemParams),
+        'it': isChatMode ? chatModePromptIT() : getSystemPromptIT(promptSystemParams),
+        'pt': isChatMode ? chatModePromptPT() : getSystemPromptPT(promptSystemParams),
+        'de': isChatMode ? chatModePromptDE() : getSystemPromptDE(promptSystemParams)
+    };
+
+    const userPrefixes = {
+        'en': isChatMode ? 'DO NOT WRITE ANY CODE. PLAN THE SOLUTION. ONLY RESPOND WITH THE EXPLANATION SECTION OBLIGATORILY. NO CODE!!' : '',
+        'es': isChatMode ? 'NO ESCRIBAS NINGÚN CÓDIGO. PLANIFICA LA SOLUCIÓN. SOLAMENTE RESPONDE CON LA SECCIÓN DE EXPLANATION OBLIGATORIAMENTE. SIN CÓDIGO!!' : '',
+        'fr': isChatMode ? 'NE ÉCRIVEZ AUCUN CODE. PLANIFIEZ LA SOLUTION. SOUS LA FORME EXPLANATION OBLIGATOIREMENT. PAS DE CODE!!' : '',
+        'it': isChatMode ? 'NON SCRIVERE NULLA DI CODICE. PIANIFICA LA SOLUZIONE. SOLO RISPONDI CON LA SEZIONE EXPLANATION OBBLIGATORIAMENTE. SENZA CODICE!!' : '',
+        'pt': isChatMode ? 'NÃO ESCREVA NENHUM CÓDIGO. PLANEJE A SOLUÇÃO. SOLO RESPONDA COM A SEÇÃO EXPLANATION OBRIGATORIAMENTE. SEM CÓDIGO!!' : '',
+        'de': isChatMode ? 'SCHREIBE KEINE CODE. PLANIFIERE DIE LÖSUNG. SOLLTE NUR DIE EXPLANATION SEZION BEARBEITEN. OHNE CODE!!' : '',
+    }
+
+    const userSuffixes = {
+        'en': '',
+        'es': '',
+        'fr': '',
+        'it': '',
+        'pt': '',
+        'de': ''
+    };
+
+    const selectedSystemPrompt = systemPrompts[locale] || systemPrompts['es'];
+    const selectedUserSuffix = userSuffixes[locale] || userSuffixes['es'];
+    const selectedUserPrefix = userPrefixes[locale] || userPrefixes['es'];
+
+    let selectedModel;
+
+    if (model === MODELS[0]) {
+        // selectedModel = openrouter('deepseek/deepseek-chat-v3-0324')
+        // selectedModel = openrouter('google/gemini-2.5-flash')
+        // selectedModel = openrouter('x-ai/grok-4-fast:free')
+        // selectedModel = google('gemini-2.5-flash')
+        // selectedModel = openrouter('deepseek/deepseek-chat-v3.1')
+
+        // gemini-2.5-pro
+        // claude-sonnet-4
+        // claude-3-7-sonnet
+        selectedModel = provider('gemini-2.5-pro')
+    } else if (model === MODELS[1]) {
+        // selectedModel = openrouter('google/gemini-2.5-flash-preview-05-20')
+        // selectedModel = openrouter('google/gemini-2.5-flash')
+        // selectedModel = google('gemini-2.5-flash')
+        // selectedModel = openrouter('google/gemini-2.5-flash')
+        selectedModel = openrouter('x-ai/grok-4-fast:free')
+    } else if (model === MODELS[2]) {
+        // selectedModel = openrouter('anthropic/claude-3.7-sonnet')
+        selectedModel = anthropic('claude-3-7-sonnet-20250219')
+    } else if (model === MODELS[3]) {
+        // selectedModel = openrouter('anthropic/claude-sonnet-4')
+        selectedModel = anthropic('claude-sonnet-4-20250514')
+    }
+
+    let updatedMessages = [...messages];
+    let urlsMessages = [];
+
+    // Append error message if exists
+    if (isError) {
+        updatedMessages.push({
+            role: 'user',
+            content: `⚠️ Error: ${isError}`,
+        });
+    }
+
+    // If it's the first generation
+    if (initialGeneration && initialMessage) {
+        updatedMessages = [
+            {
+                role: 'user',
+                content: initialMessage,
+            },
+        ];
+    }
+
+    if (urls && (urls.length > 0) && (model !== MODELS[0]) && (model !== MODELS[1])) {
+        urlsMessages.push({
+            role: 'user',
+            content: urls.map((url) => {
+                return {
+                    type: 'image',
+                    image: url,
+                }
+            }),
+        });
+    }
+
+    // Use only the most recent N valid messages
+    // const limit = (model === "Nerd") ? 28 : 84
+    const limit = 60;
+    const trimmedMessages = trimMessages(updatedMessages, limit).filter(isValidMessage);
+
+    // ===== IMAGE FILTERING FOR SPECIFIC MODELS =====
+    // TODO: Remove this entire block to revert image filtering
+    // This block filters out messages containing image content for MODELS[0] and MODELS[1]
+    // because these models don't support image processing
+    // 
+    // REVERT INSTRUCTIONS:
+    // 1. Replace 'filteredMessages' with 'trimmedMessages' in the map function below
+    // 2. Delete this entire filteredMessages assignment block
+    // 3. The existing urlsMessages logic (lines 201-211) already prevents adding new images
+    const filteredMessages = (model === MODELS[0] || model === MODELS[1])
+        ? trimmedMessages.map(msg => {
+            // Only process user messages that have array content (multimodal content)
+            if (msg.role === 'user' && Array.isArray(msg.content)) {
+                // Filter out image parts but keep text parts
+                const filteredContent = msg.content.filter(part => part.type !== 'image');
+
+                // If no content remains after filtering, skip this message entirely
+                if (filteredContent.length === 0) {
+                    return null;
+                }
+
+                return {
+                    ...msg,
+                    content: filteredContent
+                };
+            }
+            // Keep all non-user messages and user messages without array content unchanged
+            return msg;
+        }).filter(msg => msg !== null) // Remove null entries (messages with no content)
+        : trimmedMessages; // For other models, use original trimmed messages
+    // ===== END IMAGE FILTERING BLOCK =====
+
+    let processedMessages = filteredMessages.map(msg => {
+        if (msg.role === 'user') {
+            let content = (msg.content !== undefined ? msg.content : (Array.isArray(msg.parts) ? msg.parts : ''));
+
+            // CHANGED: Using filteredMessages instead of trimmedMessages for consistency
+            if (isContinuation && continuationPrompt &&
+                msg === filteredMessages.filter(m => m.role === 'user').pop()) {
+                content = continuationPrompt;
+            }
+
+            if (typeof content === 'string') {
+                content = content.replace('HIDDEN MESSAGE:', '');
+                content = (content + " " + selectedUserSuffix).trim();
+            }
+            else if (Array.isArray(content)) {
+                const cleanedParts = content.map(part => {
+                    if (part?.type === 'text' && typeof part.text === 'string') {
+                        return { ...part, text: part.text.replace('HIDDEN MESSAGE:', '') };
+                    }
+                    return part;
+                });
+
+                const suffixPart = selectedUserSuffix ? [{ type: 'text', text: selectedUserSuffix }] : [];
+                content = [...cleanedParts, ...suffixPart];
+            }
+            else {
+                content = '';
+            }
+
+            return {
+                role: 'user',
+                content
+            };
+        }
+
+        return {
+            role: msg.role,
+            content: (msg.content !== undefined ? msg.content : (Array.isArray(msg.parts) ? msg.parts : msg.content))
+        };
+    });
+
+    processedMessages = [...processedMessages, ...urlsMessages];
+    const result = streamText({
+        model: selectedModel,
+        messages: processedMessages,
+        maxOutputTokens: MODELS_PRICING[model]['Max Output Tokens'],
+        system: JSON.stringify(selectedSystemPrompt, null, 2),
+        tools: (model === MODELS[3] || model === MODELS[2]) ? [webSearchTool] : [], // websearch tool for sonnet 4 and claude 3.7 sonnet
+        onError: (e) => {
+            console.log('Error', e);
+        },
+        onFinish: async (finishResult) => {
+            try {
+                if (workspaceId && userId) {
+                    const usage = finishResult.usage;
+                    const normalizedUsage = normalizeUsage(usage);
+                    const totalTokens = calculateTotalTokens(usage, model);
+                    const normalizedTokens = calculateTotalTokensNormalized(usage, model);
+                    const cost = calculateCost(usage, model);
+
+                    await convex.mutation(api.messages.CreateMessage, {
+                        workspaceId: workspaceId,
+                        userId: userId,
+                        role: 'assistant',
+                        model: model,
+                        content: finishResult.text || '',
+                        inputTokens: normalizedUsage.promptTokens || 0,
+                        outputTokens: normalizedUsage.completionTokens || 0,
+                        totalTokens: totalTokens,
+                        normalizedTokens: normalizedTokens,
+                        cost: cost,
+                        userEmail: userEmail,
+                        userName: userName,
+                        userPicture: userPicture,
+                        isError: false
+                    });
+
+                    try {
+
+                        const { extractSections } = await import('@/lib/extract_sections');
+                        const sections = extractSections(finishResult.text || '');
+                        const shouldSubtractTokens = sections.explanation !== "";
+                        const workspace = await convex.query(api.workspace.GetWorkspace, { workspaceId });
+                        const projects = await convex.query(api.projects.GetAllProjects, { userId });
+                        const project = projects.find(p => p.workspace === workspaceId);
+                        const projectId = project?._id;
+
+                        if (projectId) {
+                            await convex.mutation(api.projects.UpdateTokenUsage, {
+                                userId: userId,
+                                projectId: projectId,
+                                inputTokens: normalizedUsage.promptTokens || 0,
+                                outputTokens: normalizedUsage.completionTokens || 0,
+                                model: model,
+                                shouldSubtractTokens: shouldSubtractTokens
+                            });
+
+                        } else {
+                            console.warn('⚠️ Project ID not found for workspace:', workspaceId);
+                        }
+                    } catch (tokenError) {
+                        console.error('❌ Error updating token usage:', tokenError);
+                        console.error('❌ Error stack:', tokenError.stack);
+                    }
+
+                }
+            } catch (error) {
+                console.error('Error in onFinish callback:', error);
+            }
+        },
+    });
+
+    return result.toUIMessageStreamResponse({
+        headers: {
+            'Transfer-Encoding': 'chunked',
+            Connection: 'keep-alive',
+        },
+
+    });
+}
+
+// https://ai-sdk.dev/docs/troubleshooting/streaming-not-working-when-deployed
+
+
+
+
+
+// USE CHAT HOOK
+const [input, setInput] = useState('');
+
+// https://ai-sdk.dev/docs/troubleshooting/use-chat-failed-to-parse-stream
+const { messages, setMessages, sendMessage, stop } = useChat({
+    api: '/api/chat',
+    experimental_throttle: 50,
+    onFinish: async ({ message, usage }) => {
+
+        const actualMessage = message.message || message;
+        const messageContent = actualMessage.content ||
+            (actualMessage.parts && actualMessage.parts.map(part => part.type === 'text' ? part.text : '').join('')) || '';
+        const responseText = messageContent.trim();
+        const isDone = responseText.toLowerCase().includes('// done');
+        const sections = extractSections(responseText)
+
+        // Token usage is now handled in the API
+        shouldSubtractTokensRef.current = true;
+
+        // Refresh user data to get updated token balance
+        const userIdForQuery = userDetail?._id;
+        const user = userIdForQuery ? await convex.query(api.users.GetUserById, {
+            userId: userIdForQuery,
+        }) : null;
+
+        // Update user detail context with fresh token balance
+        if (user && user.token !== undefined) {
+            setUserDetail(prev => ({
+                ...prev,
+                token: user.token
+            }));
+        }
+
+        // Resolve effective user id (fallback to workspace owner if needed)
+        let effectiveUserId = user?._id || null;
+        if (!effectiveUserId) {
+            try {
+                const ws = await convex.query(api.workspace.GetWorkspace, { workspaceId });
+                if (ws?.user) effectiveUserId = ws.user;
+            } catch (e) {
+                console.warn('CreateFiles: failed to fetch workspace for user fallback', e);
+            }
+        }
+
+        // Create Files
+        if (effectiveUserId) {
+            await CreateFiles({
+                workspaceId: workspaceId,
+                userId: effectiveUserId,
+                message: messageContent,
+            })
+        } else {
+            console.warn('CreateFiles skipped: no effective user id available');
+        }
+
+        if (!isDone && maxContinuationRetries < MAX_ERROR_FIX_ATTEMPTS) {
+            // if (user.token <= 0) {
+            //   setIsStreaming(false)
+            //   setOpenTokenDialog(true)
+            //   return
+            // }
+            // requestContinuationResponse(responseText)
+            // return
+        }
+
+        // if user has exlusive access but has no tokens reset to free
+        if (user && user.currentPlan === 'exclusive' && user.token < 0) {
+            await UpdateCurrentPlan({
+                userId: user._id,
+                currentPlan: 'free'
+            })
+        }
+
+        // Reset continuation retries
+        setMaxContinuationRetries(0)
+
+        // await new Promise(resolve => setTimeout(resolve, 800));
+
+        if (Object.keys(sections.files).length > 0) {
+            // await new Promise(resolve => setTimeout(resolve, 1000));
+            // setTimeout(() => {
+            //   setActiveTab('preview');
+            // }, 2000);
+            // agregar overlay editor
+            if (filteredProjects.length === 1 && firstGeneration) {
+                setNewProject(true)
+            }
+        }
+
+        // Generation complete
+        setIsInspecting(false)
+        setIsStreaming(false);
+        setProgress(0)
+        setShowProgress(false)
+        setMessageSent(false)
+        // setSelectedModel(MODELS[1])
+        setInput('')
+        setApplySolutionLoading(false)
+        setIsEditingManually(false);
+        setActiveTab('preview');
+        // setTimeout(() => {
+        //   setActiveTab('preview');
+        // }, 2000);
+
+        // Change to flash if necessary
+        // if (options.usage.promptTokens >= 56_000 && (user.currentPlan !== 'free' || authorizedEmails.includes(user.email))) {
+        //   setSelectedModel(MODELS[1])
+        // }
+    },
+    onError: error => {
+        console.error('An error occurred:', error);
+    },
+    onResponse: response => {
+        console.log('Received HTTP response from server:', response);
+    },
+});
