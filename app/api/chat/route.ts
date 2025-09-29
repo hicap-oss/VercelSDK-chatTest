@@ -6,12 +6,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 export const runtime = 'edge';
 export const maxDuration = 120;
 
-const provider = createOpenAICompatible({
-  name: 'hicap',
-  baseURL: 'https://api.hicap.ai/v2/openai/dev',
-  headers: { 'api-key': process.env.PROVIDER_API_KEY || '' },
-  includeUsage: true,
-});
+const DEFAULT_BASE_URL = 'https://api.hicap.ai/v2/openai/dev';
 
 function isValidMessage(msg: any) {
   return (
@@ -28,7 +23,19 @@ export async function POST(req: NextRequest) {
       model = 'gemini-2.5-pro',
       system = undefined,
       providerOptions = undefined,
+      endpointUrl = undefined,
     } = await req.json();
+
+    // Use custom endpoint URL if provided, otherwise use default
+    const baseURL = endpointUrl || DEFAULT_BASE_URL;
+
+    // Create provider with dynamic baseURL
+    const provider = createOpenAICompatible({
+      name: 'hicap',
+      baseURL,
+      headers: { 'api-key': process.env.PROVIDER_API_KEY || '' },
+      includeUsage: true,
+    });
 
     const processedMessages = (Array.isArray(messages) ? messages : []).filter(isValidMessage);
     // Convert UIMessage[] -> ModelMessage[] as required by streamText
@@ -76,5 +83,3 @@ export async function POST(req: NextRequest) {
     );
   }
 }
-
-

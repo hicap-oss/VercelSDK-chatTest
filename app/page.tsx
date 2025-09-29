@@ -5,11 +5,12 @@ import { useState, type FormEvent, useEffect, useRef } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Send, User, Bot, Brain, Loader2 } from 'lucide-react';
+import { Send, User, Bot, Brain, Loader2, Sparkles, Settings } from 'lucide-react';
+import Link from 'next/link';
 
 type SelectableModel = 'gemini-2.5-pro' | 'gemini-2.5-flash' | 'claude-sonnet-4' | 'claude-sonnet-4.5';
 
@@ -20,12 +21,23 @@ const MODEL_DISPLAY_NAMES: Record<SelectableModel, string> = {
   'claude-sonnet-4.5': 'Claude Sonnet 4.5',
 };
 
+const DEFAULT_ENDPOINT = 'https://api.hicap.ai/v2/openai/dev';
+
 export default function Page() {
   const [model, setModel] = useState<SelectableModel>('gemini-2.5-pro');
   const [text, setText] = useState<string>('');
   const [rawStream, setRawStream] = useState<string>('');
   const [showRaw, setShowRaw] = useState<boolean>(false);
+  const [endpointUrl, setEndpointUrl] = useState<string>(DEFAULT_ENDPOINT);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Load endpoint URL from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem('api_endpoint_url');
+    if (saved) {
+      setEndpointUrl(saved);
+    }
+  }, []);
 
   const chatOptions = {
     experimental_throttle: 50,
@@ -117,7 +129,7 @@ export default function Page() {
         console.error('Failed to tap response stream (fallback)', e);
       }
     });
-    await sendMessage({ text: trimmed }, { body: { model, stream: true } });
+    await sendMessage({ text: trimmed }, { body: { model, stream: true, endpointUrl } });
   }
 
   const hasReasoningContent = messages.some((m) => 
@@ -125,182 +137,176 @@ export default function Page() {
   );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800">
-      <div className="container mx-auto max-w-5xl p-4 md:p-8">
-        <div className="space-y-4">
-          {/* Header Card */}
-          <Card className="border-2">
-            <CardHeader>
-              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                <div>
-                  <CardTitle className="text-3xl font-bold">NerdChat</CardTitle>
-                  <CardDescription className="mt-2">
-                    Powered by Vercel AI SDK v5 with streaming support
-                  </CardDescription>
-                </div>
-                <Badge variant="outline" className="w-fit">
-                  {MODEL_DISPLAY_NAMES[model]}
-                </Badge>
+    <div className="flex flex-col h-screen bg-background">
+      {/* Compact Header */}
+      <div className="border-b bg-card/50 backdrop-blur-sm">
+        <div className="container mx-auto max-w-6xl px-4 py-3">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <Sparkles className="h-6 w-6 text-primary" />
+              <h1 className="text-xl font-bold">NerdChat</h1>
+              <Badge variant="secondary" className="hidden md:inline-flex">
+                {MODEL_DISPLAY_NAMES[model]}
+              </Badge>
+            </div>
+            
+            <div className="flex flex-wrap items-center gap-3">
+              <Select value={model} onValueChange={(value) => setModel(value as SelectableModel)}>
+                <SelectTrigger className="w-[180px] h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="gemini-2.5-pro">Gemini 2.5 Pro</SelectItem>
+                  <SelectItem value="gemini-2.5-flash">Gemini 2.5 Flash</SelectItem>
+                  <SelectItem value="claude-sonnet-4">Claude Sonnet 4</SelectItem>
+                  <SelectItem value="claude-sonnet-4.5">Claude Sonnet 4.5</SelectItem>
+                </SelectContent>
+              </Select>
+              
+              <div className="flex items-center gap-2">
+                <Checkbox 
+                  id="show-raw" 
+                  checked={showRaw} 
+                  onCheckedChange={(checked) => setShowRaw(checked === true)} 
+                />
+                <label htmlFor="show-raw" className="text-sm cursor-pointer">
+                  Raw stream
+                </label>
               </div>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-col md:flex-row gap-4 items-start md:items-center">
-                <div className="flex-1 min-w-[200px]">
-                  <label className="text-sm font-medium mb-2 block">Select Model</label>
-                  <Select value={model} onValueChange={(value) => setModel(value as SelectableModel)}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="gemini-2.5-pro">Gemini 2.5 Pro</SelectItem>
-                      <SelectItem value="gemini-2.5-flash">Gemini 2.5 Flash</SelectItem>
-                      <SelectItem value="claude-sonnet-4">Claude Sonnet 4</SelectItem>
-                      <SelectItem value="claude-sonnet-4.5">Claude Sonnet 4.5</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex items-center gap-6">
-                  <div className="flex items-center space-x-2">
-                    <Checkbox 
-                      id="show-raw" 
-                      checked={showRaw} 
-                      onCheckedChange={(checked) => setShowRaw(checked === true)} 
-                    />
-                    <label
-                      htmlFor="show-raw"
-                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
-                    >
-                      Show raw stream
-                    </label>
-                  </div>
-                  {showRaw && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setRawStream('')}
-                      disabled={rawStream.length === 0}
-                    >
-                      Clear
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              
+              {showRaw && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setRawStream('')}
+                  disabled={rawStream.length === 0}
+                  className="h-9"
+                >
+                  Clear
+                </Button>
+              )}
+              
+              <Link href="/settings">
+                <Button variant="ghost" size="icon" className="h-9 w-9">
+                  <Settings className="h-4 w-4" />
+                </Button>
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
 
-          {/* Messages Card */}
-          <Card className="border-2">
-            <CardContent className="p-6">
-              <div className="h-[60vh] overflow-y-auto space-y-4 pr-4">
-                {messages.length === 0 && (
-                  <div className="flex items-center justify-center h-full text-muted-foreground">
-                    <div className="text-center space-y-2">
-                      <Bot className="h-12 w-12 mx-auto opacity-50" />
-                      <p className="text-lg">Start a conversation</p>
-                      <p className="text-sm">Type a message below to begin chatting</p>
+      {/* Messages Area */}
+      <div className="flex-1 overflow-hidden">
+        <div className="container mx-auto max-w-6xl h-full px-4 py-4">
+          <Card className="h-full flex flex-col shadow-lg">
+            <CardContent className="flex-1 overflow-y-auto p-4 space-y-4">
+              {messages.length === 0 && (
+                <div className="flex items-center justify-center h-full text-muted-foreground">
+                  <div className="text-center space-y-3">
+                    <Bot className="h-16 w-16 mx-auto opacity-20" />
+                    <p className="text-lg font-medium">Start a conversation</p>
+                    <p className="text-sm">Choose a model and type a message below</p>
+                  </div>
+                </div>
+              )}
+              
+              {messages.map((m) => (
+                <div
+                  key={m.id}
+                  className={`flex gap-3 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div className={`flex gap-3 max-w-[85%] ${m.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
+                    <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+                      m.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-secondary'
+                    }`}>
+                      {m.role === 'user' ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
+                    </div>
+                    <div className={`rounded-2xl px-4 py-2.5 ${
+                      m.role === 'user' 
+                        ? 'bg-primary text-primary-foreground' 
+                        : 'bg-muted'
+                    }`}>
+                      <div className="text-sm whitespace-pre-wrap break-words">
+                        {Array.isArray((m as any).parts)
+                          ? (m as any).parts
+                              .filter((p: any) => p?.type === 'text')
+                              .map((p: any) => p.text)
+                              .join('')
+                          : (m as any).content ?? ''}
+                      </div>
                     </div>
                   </div>
-                )}
-                
-                {messages.map((m) => (
-                  <div
-                    key={m.id}
-                    className={`flex gap-3 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div className={`flex gap-3 max-w-[80%] ${m.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
-                      <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
-                        m.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-secondary'
-                      }`}>
-                        {m.role === 'user' ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
+                </div>
+              ))}
+              
+              {isSending && (
+                <div className="flex gap-3 justify-start">
+                  <div className="flex gap-3 max-w-[85%]">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-secondary flex items-center justify-center">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    </div>
+                    <div className="rounded-2xl px-4 py-2.5 bg-muted">
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <span>Thinking</span>
+                        <span className="animate-pulse">...</span>
                       </div>
-                      <div className={`rounded-lg px-4 py-3 ${
-                        m.role === 'user' 
-                          ? 'bg-primary text-primary-foreground' 
-                          : 'bg-muted'
-                      }`}>
-                        <div className="text-sm whitespace-pre-wrap break-words">
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {hasReasoningContent && (
+                <Card className="bg-primary/10 border-primary/30">
+                  <CardContent className="pt-4 pb-3">
+                    <div className="flex items-center gap-2 mb-2 text-sm font-medium text-primary">
+                      <Brain className="h-4 w-4" />
+                      Thinking Transcript
+                    </div>
+                    <div className="space-y-2 text-sm">
+                      {messages.map((m) => (
+                        <div key={`r-${m.id}`}>
                           {Array.isArray((m as any).parts)
                             ? (m as any).parts
-                                .filter((p: any) => p?.type === 'text')
-                                .map((p: any) => p.text)
-                                .join('')
-                            : (m as any).content ?? ''}
+                                .filter((p: any) => p?.type === 'reasoning')
+                                .map((p: any, idx: number) => (
+                                  <div key={idx} className="whitespace-pre-wrap">{p.text}</div>
+                                ))
+                            : null}
                         </div>
-                      </div>
+                      ))}
                     </div>
-                  </div>
-                ))}
-                
-                {isSending && (
-                  <div className="flex gap-3 justify-start">
-                    <div className="flex gap-3 max-w-[80%]">
-                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-secondary flex items-center justify-center">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      </div>
-                      <div className="rounded-lg px-4 py-3 bg-muted">
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <span>Thinking</span>
-                          <span className="animate-pulse">...</span>
-                        </div>
-                      </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {error && (
+                <Card className="bg-destructive/10 border-destructive/50">
+                  <CardContent className="pt-4 pb-3">
+                    <div className="text-sm text-destructive">
+                      <strong>Error:</strong> {error.message}
                     </div>
-                  </div>
-                )}
+                  </CardContent>
+                </Card>
+              )}
 
-                {hasReasoningContent && (
-                  <Card className="bg-yellow-50 dark:bg-yellow-950 border-yellow-200 dark:border-yellow-800">
-                    <CardHeader>
-                      <CardTitle className="text-base flex items-center gap-2">
-                        <Brain className="h-4 w-4" />
-                        Thinking Transcript
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-2">
-                        {messages.map((m) => (
-                          <div key={`r-${m.id}`}>
-                            {Array.isArray((m as any).parts)
-                              ? (m as any).parts
-                                  .filter((p: any) => p?.type === 'reasoning')
-                                  .map((p: any, idx: number) => (
-                                    <div key={idx} className="text-sm whitespace-pre-wrap">{p.text}</div>
-                                  ))
-                              : null}
-                          </div>
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
-                )}
+              {showRaw && rawStream && (
+                <Card className="bg-muted/50 dark:bg-muted border-muted-foreground/20">
+                  <CardContent className="pt-4 pb-3">
+                    <div className="text-xs font-medium mb-2">Raw Stream</div>
+                    <pre className="text-xs whitespace-pre-wrap break-all font-mono overflow-x-auto max-h-40">
+                      {rawStream}
+                    </pre>
+                  </CardContent>
+                </Card>
+              )}
 
-                {error && (
-                  <Card className="bg-destructive/10 border-destructive/50">
-                    <CardContent className="pt-6">
-                      <div className="text-sm text-destructive">
-                        <strong>Error:</strong> {error.message}
-                      </div>
-                    </CardContent>
-                  </Card>
-                )}
-
-                {showRaw && (
-                  <Card className="bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700">
-                    <CardHeader>
-                      <CardTitle className="text-base">Raw Stream</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <pre className="text-xs whitespace-pre-wrap break-all font-mono overflow-x-auto max-h-60">
-                        {rawStream || '— waiting for data —'}
-                      </pre>
-                    </CardContent>
-                  </Card>
-                )}
-
-                <div ref={messagesEndRef} />
-              </div>
+              <div ref={messagesEndRef} />
             </CardContent>
-            <CardFooter>
-              <form onSubmit={onSubmit} className="flex w-full gap-2">
+            
+            {/* Input Area */}
+            <div className="border-t p-4">
+              <form onSubmit={onSubmit} className="flex gap-2">
                 <Input
                   name="prompt"
                   value={text}
@@ -314,6 +320,7 @@ export default function Page() {
                   type="submit"
                   disabled={isSending || text.trim().length === 0}
                   size="icon"
+                  className="shrink-0"
                 >
                   {isSending ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -322,13 +329,11 @@ export default function Page() {
                   )}
                 </Button>
               </form>
-            </CardFooter>
+              <p className="text-center text-xs text-muted-foreground mt-2">
+                Powered by Vercel AI SDK v5
+              </p>
+            </div>
           </Card>
-
-          {/* Footer */}
-          <p className="text-center text-sm text-muted-foreground">
-            Set <code className="bg-muted px-2 py-1 rounded text-xs">PROVIDER_API_KEY</code> in your environment
-          </p>
         </div>
       </div>
     </div>
