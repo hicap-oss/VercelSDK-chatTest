@@ -1,4 +1,4 @@
-# NerdChat - Vercel AI SDK v5 Reference Implementation
+# Vercel AI SDK v5 Reference Implementation
 
 A production-ready chat application demonstrating **best practices** for Vercel AI SDK v5 (`@ai-sdk/react` v2.x and `ai` v5.x) with Next.js 14+.
 
@@ -97,7 +97,7 @@ Navigate to [http://localhost:3000](http://localhost:3000)
 ### File Structure
 
 ```
-NerdChat/
+SDK Test/
 ├── app/
 │   ├── api/
 │   │   └── chat/
