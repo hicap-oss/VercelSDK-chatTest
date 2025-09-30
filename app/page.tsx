@@ -32,6 +32,12 @@ export default function Page() {
   const [showRaw, setShowRaw] = useState<boolean>(false);
   const [endpointUrl, setEndpointUrl] = useState<string>(DEFAULT_ENDPOINT);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  // Ref to track and cancel active stream readers
+  const activeReaderRef = useRef<{
+    controller: AbortController;
+    reader: ReadableStreamDefaultReader<Uint8Array>;
+  } | null>(null);
 
   // Load endpoint URL from localStorage
   useEffect(() => {
@@ -54,6 +60,20 @@ export default function Page() {
     
     const originalFetch = window.fetch;
     
+    // Helper function to cancel any active reader
+    const cancelActiveReader = () => {
+      if (activeReaderRef.current) {
+        try {
+          activeReaderRef.current.reader.cancel();
+          activeReaderRef.current.controller.abort();
+        } catch (err) {
+          // Ignore errors during cancellation
+          console.debug('Error canceling reader:', err);
+        }
+        activeReaderRef.current = null;
+      }
+    };
+    
     window.fetch = async (...args: Parameters<typeof fetch>) => {
       const response = await originalFetch(...args);
       
@@ -62,15 +82,49 @@ export default function Page() {
         const cloned = response.clone();
         const body = cloned.body;
         if (body) {
-          setRawStream('');
+          // Cancel any previous reader to prevent overlapping updates
+          cancelActiveReader();
+          
+          // Create new AbortController for this request
+          const controller = new AbortController();
           const reader = body.getReader();
+          
+          // Store controller and reader for cleanup
+          activeReaderRef.current = { controller, reader };
+          
+          // Clear previous stream content
+          setRawStream('');
+          
+          // Start reading stream asynchronously with proper error handling
           const decoder = new TextDecoder();
           (async () => {
-            while (true) {
-              const { value, done } = await reader.read();
-              if (done) break;
-              const chunk = decoder.decode(value, { stream: true });
-              setRawStream((prev) => prev + chunk);
+            try {
+              while (true) {
+                // Check if aborted before reading
+                if (controller.signal.aborted) {
+                  break;
+                }
+                
+                const { value, done } = await reader.read();
+                
+                if (done) break;
+                
+                // Check if aborted before updating state
+                if (!controller.signal.aborted) {
+                  const chunk = decoder.decode(value, { stream: true });
+                  setRawStream((prev) => prev + chunk);
+                }
+              }
+            } catch (err) {
+              // Only log errors that aren't due to intentional cancellation
+              if (!controller.signal.aborted && err instanceof Error && err.name !== 'AbortError') {
+                console.error('Error reading stream:', err);
+              }
+            } finally {
+              // Clean up this reader from ref if it's still the active one
+              if (activeReaderRef.current?.controller === controller) {
+                activeReaderRef.current = null;
+              }
             }
           })();
         }
@@ -79,8 +133,10 @@ export default function Page() {
       return response;
     };
     
+    // Cleanup: restore original fetch and cancel any active readers
     return () => {
       window.fetch = originalFetch;
+      cancelActiveReader();
     };
   }, [showRaw]);
 
@@ -98,21 +154,27 @@ export default function Page() {
     const trimmed = input.trim();
     if (!trimmed || isLoading) return;
 
-    // Clear input and prepare for new response
-    setInput('');
-    setRawStream('');
+    try {
+      // Clear input and prepare for new response
+      setInput('');
+      setRawStream('');
 
-    // Send message with custom body parameters
-    await sendMessage(
-      { text: trimmed },
-      { 
-        body: { 
-          model, 
-          stream: true, 
-          endpointUrl 
-        } 
-      }
-    );
+      // Send message with custom body parameters
+      await sendMessage(
+        { text: trimmed },
+        { 
+          body: { 
+            model, 
+            stream: true, 
+            endpointUrl 
+          } 
+        }
+      );
+    } catch (err) {
+      // Restore input on error so user doesn't lose their message
+      setInput(trimmed);
+      console.error('Failed to send message:', err);
+    }
   };
 
   const hasReasoningContent = messages.some((m) => 

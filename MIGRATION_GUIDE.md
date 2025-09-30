@@ -468,8 +468,8 @@ const isLoading = status === 'submitted' || status === 'streaming';
 - [SDK v5 Best Practices Guide](./VERCEL_SDK_V5_BEST_PRACTICES.md)
 - [Quick Reference](./SDK_V5_QUICK_REFERENCE.md)
 - [Example Implementation](./app/page.tsx)
-- [Official Migration Guide](https://sdk.vercel.ai/docs/ai-sdk-ui/migration-guide)
-- [Vercel AI SDK Docs](https://sdk.vercel.ai/)
+- [Official Migration Guide](https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0)
+- [Vercel AI SDK Docs](https://ai-sdk.dev/docs)
 
 ---
 
