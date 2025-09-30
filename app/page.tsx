@@ -1,7 +1,8 @@
 // app/page.tsx
+// Dependencies: React 18+, Next.js 14+, @ai-sdk/react ^2.0, ai ^5.0
 'use client';
 
-import { useState, type FormEvent, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -24,12 +25,19 @@ const MODEL_DISPLAY_NAMES: Record<SelectableModel, string> = {
 const DEFAULT_ENDPOINT = 'https://api.hicap.ai/v2/openai/dev';
 
 export default function Page() {
+  // UI state management
   const [model, setModel] = useState<SelectableModel>('gemini-2.5-pro');
-  const [text, setText] = useState<string>('');
+  const [input, setInput] = useState<string>('');
   const [rawStream, setRawStream] = useState<string>('');
   const [showRaw, setShowRaw] = useState<boolean>(false);
   const [endpointUrl, setEndpointUrl] = useState<string>(DEFAULT_ENDPOINT);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  // Ref to track and cancel active stream readers
+  const activeReaderRef = useRef<{
+    controller: AbortController;
+    reader: ReadableStreamDefaultReader<Uint8Array>;
+  } | null>(null);
 
   // Load endpoint URL from localStorage
   useEffect(() => {
@@ -39,98 +47,135 @@ export default function Page() {
     }
   }, []);
 
-  const chatOptions = {
+  // Vercel AI SDK v5 useChat hook
+  // Note: @ai-sdk/react v2.x returns { messages, sendMessage, status, error }
+  // This is different from older 'ai' package which had input/handleSubmit helpers
+  const { messages, sendMessage, status, error } = useChat({
     experimental_throttle: 50,
-    onError: (error: unknown) => {
-      console.error('An error occurred:', error);
-    },
-  } as unknown as Parameters<typeof useChat>[0];
+  });
 
-  // Some versions of the hook expose `onResponse`; if present, we tap the raw stream.
-  (chatOptions as any).onResponse = (response: Response) => {
-    try {
-      setRawStream('');
-      const cloned = response.clone();
-      const body = cloned.body;
-      if (!body) return;
-      const reader = body.getReader();
-      const decoder = new TextDecoder();
-      (async () => {
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          const chunk = decoder.decode(value, { stream: true });
-          setRawStream((prev) => prev + chunk);
+  // Intercept fetch to capture raw stream for debugging
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    const originalFetch = window.fetch;
+    
+    // Helper function to cancel any active reader
+    const cancelActiveReader = () => {
+      if (activeReaderRef.current) {
+        try {
+          activeReaderRef.current.reader.cancel();
+          activeReaderRef.current.controller.abort();
+        } catch (err) {
+          // Ignore errors during cancellation
+          console.debug('Error canceling reader:', err);
         }
-      })().catch((e) => console.error('raw stream read failed', e));
-    } catch (e) {
-      console.error('Failed to clone/read response stream', e);
-    }
-  };
-
-  const { messages, sendMessage, status, error } = useChat(chatOptions);
+        activeReaderRef.current = null;
+      }
+    };
+    
+    window.fetch = async (...args: Parameters<typeof fetch>) => {
+      const response = await originalFetch(...args);
+      
+      const url = typeof args[0] === 'string' ? args[0] : (args[0] as Request).url;
+      if (url.includes('/api/chat') && showRaw) {
+        const cloned = response.clone();
+        const body = cloned.body;
+        if (body) {
+          // Cancel any previous reader to prevent overlapping updates
+          cancelActiveReader();
+          
+          // Create new AbortController for this request
+          const controller = new AbortController();
+          const reader = body.getReader();
+          
+          // Store controller and reader for cleanup
+          activeReaderRef.current = { controller, reader };
+          
+          // Clear previous stream content
+          setRawStream('');
+          
+          // Start reading stream asynchronously with proper error handling
+          const decoder = new TextDecoder();
+          (async () => {
+            try {
+              while (true) {
+                // Check if aborted before reading
+                if (controller.signal.aborted) {
+                  break;
+                }
+                
+                const { value, done } = await reader.read();
+                
+                if (done) break;
+                
+                // Check if aborted before updating state
+                if (!controller.signal.aborted) {
+                  const chunk = decoder.decode(value, { stream: true });
+                  setRawStream((prev) => prev + chunk);
+                }
+              }
+            } catch (err) {
+              // Only log errors that aren't due to intentional cancellation
+              if (!controller.signal.aborted && err instanceof Error && err.name !== 'AbortError') {
+                console.error('Error reading stream:', err);
+              }
+            } finally {
+              // Clean up this reader from ref if it's still the active one
+              if (activeReaderRef.current?.controller === controller) {
+                activeReaderRef.current = null;
+              }
+            }
+          })();
+        }
+      }
+      
+      return response;
+    };
+    
+    // Cleanup: restore original fetch and cancel any active readers
+    return () => {
+      window.fetch = originalFetch;
+      cancelActiveReader();
+    };
+  }, [showRaw]);
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, status]);
 
-  // Fallback: intercept the next fetch to /api/chat and tap the stream
-  function interceptNextChatResponse(tap: (response: Response) => void) {
-    if (typeof window === 'undefined' || !(window as any).fetch) return;
-    const originalFetch = window.fetch;
-    let done = false;
-    window.fetch = async (...args: Parameters<typeof fetch>) => {
-      const res = await originalFetch(...args);
-      try {
-        if (!done) {
-          const input = args[0] as any;
-          const url = typeof input === 'string' ? input : input?.url ?? '';
-          if (typeof url === 'string' && url.includes('/api/chat')) {
-            done = true;
-            tap(res.clone());
-            window.fetch = originalFetch;
-          }
-        }
-      } catch {
-        // restore on any error
-        window.fetch = originalFetch;
-      }
-      return res;
-    };
-  }
+  // Determine loading state from status
+  const isLoading = status === 'submitted' || status === 'streaming';
 
-  const isSending = status === 'submitted' || status === 'streaming';
-
-  async function onSubmit(e: FormEvent) {
+  // Form submission handler following SDK v5 pattern
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const trimmed = text.trim();
-    if (trimmed.length === 0 || isSending) return;
-    // Clear immediately so the box always empties on submit
-    setText('');
-    setRawStream('');
-    if (showRaw === false) setShowRaw(true);
-    // Install one-shot interceptor in case onResponse is not supported by the hook
-    interceptNextChatResponse((response: Response) => {
-      try {
-        const body = response.body;
-        if (!body) return;
-        const reader = body.getReader();
-        const decoder = new TextDecoder();
-        (async () => {
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            const chunk = decoder.decode(value, { stream: true });
-            setRawStream((prev) => prev + chunk);
-          }
-        })().catch((e) => console.error('raw stream read failed (fallback)', e));
-      } catch (e) {
-        console.error('Failed to tap response stream (fallback)', e);
-      }
-    });
-    await sendMessage({ text: trimmed }, { body: { model, stream: true, endpointUrl } });
-  }
+    const trimmed = input.trim();
+    if (!trimmed || isLoading) return;
+
+    try {
+      // Clear input and prepare for new response
+      setInput('');
+      setRawStream('');
+
+      // Send message with custom body parameters
+      await sendMessage(
+        { text: trimmed },
+        { 
+          body: { 
+            model, 
+            stream: true, 
+            endpointUrl 
+          } 
+        }
+      );
+    } catch (err) {
+      // Restore input on error so user doesn't lose their message
+      setInput(trimmed);
+      console.error('Failed to send message:', err);
+    }
+  };
 
   const hasReasoningContent = messages.some((m) => 
     Array.isArray((m as any).parts) && (m as any).parts.some((p: any) => p?.type === 'reasoning')
@@ -240,7 +285,7 @@ export default function Page() {
                 </div>
               ))}
               
-              {isSending && (
+              {isLoading && (
                 <div className="flex gap-3 justify-start">
                   <div className="flex gap-3 max-w-[85%]">
                     <div className="flex-shrink-0 w-8 h-8 rounded-full bg-secondary flex items-center justify-center">
@@ -290,12 +335,12 @@ export default function Page() {
                 </Card>
               )}
 
-              {showRaw && rawStream && (
+              {showRaw && (
                 <Card className="bg-muted/50 dark:bg-muted border-muted-foreground/20">
                   <CardContent className="pt-4 pb-3">
                     <div className="text-xs font-medium mb-2">Raw Stream</div>
                     <pre className="text-xs whitespace-pre-wrap break-all font-mono overflow-x-auto max-h-40">
-                      {rawStream}
+                      {rawStream || '(waiting for response...)'}
                     </pre>
                   </CardContent>
                 </Card>
@@ -306,23 +351,23 @@ export default function Page() {
             
             {/* Input Area */}
             <div className="border-t p-4">
-              <form onSubmit={onSubmit} className="flex gap-2">
+              <form onSubmit={handleSubmit} className="flex gap-2">
                 <Input
                   name="prompt"
-                  value={text}
+                  value={input}
                   placeholder="Type your message..."
-                  onChange={(e) => setText(e.target.value)}
+                  onChange={(e) => setInput(e.target.value)}
                   autoComplete="off"
-                  disabled={isSending}
+                  disabled={isLoading}
                   className="flex-1"
                 />
                 <Button
                   type="submit"
-                  disabled={isSending || text.trim().length === 0}
+                  disabled={isLoading || input.trim().length === 0}
                   size="icon"
                   className="shrink-0"
                 >
-                  {isSending ? (
+                  {isLoading ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     <Send className="h-4 w-4" />
