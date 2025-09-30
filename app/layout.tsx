@@ -6,7 +6,7 @@ import { Inter } from 'next/font/google';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'NerdChat - AI Chat Interface',
+  title: 'SDK Chat - AI Chat Interface',
   description: 'A polished chat interface powered by Vercel AI SDK v5',
 };
 
