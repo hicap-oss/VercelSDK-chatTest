@@ -1,8 +1,8 @@
 # Vercel AI SDK v5 Best Practices Guide
 
-**NerdChat** - A Reference Implementation
+**SDK Chat** - A Reference Implementation
 
-This document explains how NerdChat demonstrates best practices for using Vercel AI SDK v5 (`@ai-sdk/react` v2.x and `ai` v5.x) in a production-ready Next.js application.
+This document explains how SDK Chat demonstrates best practices for using Vercel AI SDK v5 (`@ai-sdk/react` v2.x and `ai` v5.x) in a production-ready Next.js application.
 
 ---
 
@@ -20,9 +20,9 @@ This document explains how NerdChat demonstrates best practices for using Vercel
 
 ## Overview
 
-### What is NerdChat?
+### What is SDK Chat?
 
-NerdChat is a modern chat interface that demonstrates proper integration with Vercel AI SDK v5. It supports:
+SDK Chat is a modern chat interface that demonstrates proper integration with Vercel AI SDK v5. It supports:
 - Multiple AI models (Gemini, Claude)
 - Real-time streaming responses
 - Custom API endpoints
@@ -581,7 +581,7 @@ export async function POST(req: NextRequest) {
 
 ### 1. Reasoning/Thinking Content
 
-NerdChat demonstrates handling special content types:
+SDK Chat demonstrates handling special content types:
 
 ```typescript
 const hasReasoningContent = messages.some((m) => 
@@ -794,7 +794,7 @@ test('sends message on form submit', async () => {
 
 ## Conclusion
 
-NerdChat demonstrates **production-ready patterns** for Vercel AI SDK v5:
+SDK Chat demonstrates **production-ready patterns** for Vercel AI SDK v5:
 
 1. ✅ Correct hook usage (`useChat` from `@ai-sdk/react`)
 2. ✅ Manual input state management

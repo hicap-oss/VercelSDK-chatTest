@@ -189,7 +189,7 @@ export default function Page() {
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <Sparkles className="h-6 w-6 text-primary" />
-              <h1 className="text-xl font-bold">NerdChat</h1>
+              <h1 className="text-xl font-bold">SDK Chat</h1>
               <Badge variant="secondary" className="hidden md:inline-flex">
                 {MODEL_DISPLAY_NAMES[model]}
               </Badge>
