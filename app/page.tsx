@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Send, User, Bot, Brain, Loader2, Sparkles, Settings } from 'lucide-react';
 import Link from 'next/link';
 
-type SelectableModel = 'gemini-2.5-pro' | 'gemini-2.5-flash' | 'claude-sonnet-4' | 'claude-sonnet-4.5' | 'gpt-5' | 'gpt-5-chat' | 'gpt-5-mini';
+type SelectableModel = 'gemini-2.5-pro' | 'gemini-2.5-flash' | 'claude-sonnet-4' | 'claude-sonnet-4.5' | 'gpt-5' | 'gpt-5-chat' | 'gpt-5-mini' | 'grok-4-fast';
 
 const MODEL_DISPLAY_NAMES: Record<SelectableModel, string> = {
   'gemini-2.5-pro': 'Gemini 2.5 Pro',
@@ -23,6 +23,7 @@ const MODEL_DISPLAY_NAMES: Record<SelectableModel, string> = {
   'gpt-5': 'GPT-5',
   'gpt-5-chat': 'GPT-5 Chat',
   'gpt-5-mini': 'GPT-5 Mini',
+  'grok-4-fast': 'Grok 4 Fast',
 };
 
 const DEFAULT_ENDPOINT = 'https://api.hicap.ai/v2/openai/dev';
@@ -211,6 +212,7 @@ export default function Page() {
                   <SelectItem value="gpt-5">GPT-5</SelectItem>
                   <SelectItem value="gpt-5-chat">GPT-5 Chat</SelectItem>
                   <SelectItem value="gpt-5-mini">GPT-5 Mini</SelectItem>
+                  <SelectItem value="grok-4-fast">Grok 4 Fast</SelectItem>
                 </SelectContent>
               </Select>
               
